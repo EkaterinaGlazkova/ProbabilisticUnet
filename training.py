@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import trange
 import numpy as np
+import PIL
+import matplotlib.pyplot as plt
 
 from model.model import ProbUNet
 import visualization_utils
@@ -21,7 +23,10 @@ def get_id_to_train_id(labels = labels):
     id_to_train_id = np.zeros((len(labels), 1), int)
     for item in labels:
         if item.id > 0:
-            id_to_train_id[item.id] = item.trainId
+            if item.trainId == 255:
+                id_to_train_id[item.id] = 0
+            else:
+                id_to_train_id[item.id] = item.trainId 
     return id_to_train_id
 
 def get_train_id_to_id(labels = labels):
@@ -31,7 +36,7 @@ def get_train_id_to_id(labels = labels):
             train_id_to_id[item.trainId] = item.id
     return train_id_to_id
 
-def train_epoch(model, optimizer, batchsize=8):
+def train_epoch(model, optimizer, train_loader, batchsize):
     loss_log = []
     model.train()
     for _, (x_batch, y_batch) in zip(trange(len(train_loader)), train_loader):
@@ -87,14 +92,14 @@ def plot_history(train_history, ce_log, acc_log, epoch_num, save_dir = "results/
     plt.savefig(save_dir + str(epoch_num) + ".png")
     
     
-def train(model, opt, n_epochs, save_path = None):
+def train(model, opt, n_epochs, train_loader, test_loader, save_path = None):
     train_log = []
     ce_log, acc_log = [], []
 
     batchsize = batch_size
 
     for epoch in range(n_epochs):
-        train_loss = train_epoch(model, opt, batchsize=batchsize)
+        train_loss = train_epoch(model, opt, train_loader, batchsize=batchsize)
 
         val_loss, val_acc = test(model,epoch, test_loader, res_dir = "results/")
 
@@ -110,11 +115,11 @@ def train(model, opt, n_epochs, save_path = None):
             torch.save(model.state_dict(), save_path)
             
     print("Final error: {:.2%}".format(1 - acc_log[-1][1]))
-
-if __name__ == "__main__":
-
+    
+def training():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     data_root = "/home/glazkova/ProbabilisticUnet/data"
+    id_to_train_id = get_id_to_train_id()
 
     img_transform_func = transforms.Compose([
                         transforms.Resize((256, 512), interpolation = PIL.Image.BILINEAR),
@@ -124,8 +129,9 @@ if __name__ == "__main__":
 
     labels_transform_func = transforms.Compose([
                         transforms.Resize((256, 512), interpolation = PIL.Image.NEAREST),
-                        transforms.ToTensor(),
-                        transforms.Lambda(lambda x: x*255) #better way?
+                        transforms.Lambda(lambda x: id_to_train_id[x]),
+                        transforms.ToTensor()
+                        #transforms.Lambda(lambda x: x*255) #better way?
 
                     ])
 
@@ -157,4 +163,7 @@ if __name__ == "__main__":
     model = ProbUNet(num_classes, latent_space_size)
     model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=0.0001)
-    train(model, opt, n_epochs, save_path = "results/model")
+    train(model, opt, n_epochs, train_loader, test_loader, save_path = "results/model")
+
+if __name__ == "__main__":
+    training()

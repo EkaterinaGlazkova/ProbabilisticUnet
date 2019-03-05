@@ -64,7 +64,7 @@ class Conv1x1(nn.Module):
     
 
 class GaussNet(nn.Module):
-    def __init__(self, distr_type = "Prior", latent_ch_num = 6, num_blocks = 3, n_classes = 21):
+    def __init__(self, distr_type = "Prior", latent_ch_num = 6, num_blocks = 3, n_classes = 19):
         super(GaussNet, self).__init__()
         
         assert distr_type in {"Prior", "Posterior"}, "Incorrect distribution type"
@@ -113,7 +113,7 @@ class GaussNet(nn.Module):
         
         res = []
         for i in range(bs):
-            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
+            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i] + 1e-5)))) #a better way?
             
         return res
     
@@ -121,6 +121,7 @@ class GaussNet(nn.Module):
 class ProbUNet(nn.Module):
     def __init__(self, n_classes, latent_ch_num, unet_num_blocks = 4):
         super(ProbUNet, self).__init__()
+        self.n_classes =n_classes
         self.unet = UNet(n_classes, unet_num_blocks).to(device)
         self.prior = GaussNet(distr_type="Prior", latent_ch_num = latent_ch_num).to(device)
         self.posterior = GaussNet(distr_type="Posterior", latent_ch_num = latent_ch_num).to(device)
@@ -152,11 +153,10 @@ class ProbUNet(nn.Module):
         return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
     
     def compute_lower_bound(self, imgs, segms, beta = 1):
-        
         self.forward(imgs, segms)
         self.predicted_logits = self.reconstruct()
         ce_loss = nn.CrossEntropyLoss()
-        cross_entropy_loss = ce_loss(self.predicted_logits.view(-1, 21), segms.type(torch.cuda.LongTensor).view(-1)).sum()
+        cross_entropy_loss = ce_loss(self.predicted_logits.view(-1, self.n_classes), segms.type(torch.cuda.LongTensor).view(-1)).sum()
         kl = self.compute_kl().sum()
         return cross_entropy_loss + beta * kl
         
