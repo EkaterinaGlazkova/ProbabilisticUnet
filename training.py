@@ -19,7 +19,7 @@ from labels import labels
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_classes = 19
 
-batch_size = 8
+batch_size = 16
 latent_space_size = 6
 
 
@@ -49,6 +49,7 @@ def train_epoch(model, optimizer, train_loader, batchsize):
         optimizer.zero_grad()
         model_loss = model.compute_lower_bound(x_batch, y_batch)
         model_loss.backward()
+        #print("Grad: ", model.unet.input_block.conv_net[0].weight.grad)
         optimizer.step()
         loss = model_loss.item()
         loss_log.append(loss)
@@ -106,7 +107,6 @@ def train(model, opt, n_epochs, train_loader, test_loader, save_path = None):
         train_loss = train_epoch(model, opt, train_loader, batchsize=batchsize)
 
         val_loss, val_acc = test(model, epoch, test_loader, res_dir = "results/")
-        train_loss = [0,1]
         train_log.extend(train_loss)
 
         steps = len(train_loader)
@@ -165,7 +165,7 @@ def training():
 
     model = ProbUNet(num_classes, latent_space_size)
     model.to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=0.0001)
+    opt = torch.optim.Adam(model.parameters(), lr=0.001)
     train(model, opt, n_epochs, train_loader, test_loader, save_path = "results/model")
 
 if __name__ == "__main__":

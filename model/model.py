@@ -158,5 +158,6 @@ class ProbUNet(nn.Module):
         ce_loss = nn.CrossEntropyLoss()
         cross_entropy_loss = ce_loss(self.predicted_logits.view(-1, self.n_classes), segms.type(torch.cuda.LongTensor).view(-1)).sum()
         kl = self.compute_kl().sum()
+        #print(cross_entropy_loss, kl)
         return cross_entropy_loss + beta * kl
         
