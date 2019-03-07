@@ -12,7 +12,7 @@ class UNet(nn.Module):
     def __init__(self, n_classes, num_blocks):
         super(UNet, self).__init__()
         self.num_blocks = num_blocks
-        self.input_block = unet_parts.conv_unit(3, 32, 3).to(device)
+        self.input_block = unet_parts.conv_unit(3, 32, 1).to(device)
         self.down_blocks = []
         self.up_blocks = []
 
@@ -36,7 +36,7 @@ class UNet(nn.Module):
         for i in range(self.num_blocks):
             x = self.up_blocks[i](x, x_inner[-(i+2)])
         x = self.output_block(x)
-        x = torch.nn.Softmax(dim=-1)(x)
+        #print(x.shape)
         return x
     
     
@@ -44,22 +44,24 @@ class Conv1x1(nn.Module):
     def __init__(self, n_classes, latent_ch_num, hidden_size = None):
         super(Conv1x1, self).__init__()
         if hidden_size is None:
-            hidden_size = n_classes
+            hidden_size = n_classes*2
         self.n_classes = n_classes
         self.latent_ch_num = latent_ch_num
         self.conv = nn.Sequential(
             nn.Conv2d(n_classes + latent_ch_num, hidden_size, 1, padding = 0).to(device), 
             nn.ReLU(),
-            nn.Conv2d(hidden_size, n_classes, 1, padding = 0).to(device), 
-            nn.ReLU()
+            nn.Conv2d(hidden_size, hidden_size, 1, padding = 0).to(device), 
+            nn.ReLU(),
+            nn.Conv2d(hidden_size, hidden_size, 1, padding = 0).to(device), 
+            nn.ReLU(),
+            nn.Conv2d(hidden_size, n_classes, 1, padding = 0).to(device)
         )
 
     def forward(self, unet_res, z):
-        n,h,w = unet_res.shape[1:]
-        z = z.unsqueeze(2).unsqueeze(3).expand(-1, self.latent_ch_num, h, w) #better way?
+        bs, _, h,w = unet_res.shape
+        z = z.unsqueeze(2).unsqueeze(3).expand(bs, self.latent_ch_num, h, w) #better way?
         inp = torch.cat([unet_res, z], dim=1)
         res = self.conv(inp)
-        res = torch.nn.Softmax(dim=-1)(res)
         return res
     
 
@@ -76,11 +78,9 @@ class GaussNet(nn.Module):
             inp_ch_num = 3
             
         self.num_blocks = num_blocks
-        
         self.latent_ch_num = latent_ch_num
-            
-        input_block = unet_parts.conv_unit(inp_ch_num, 32, 3)
-            
+        
+        input_block = unet_parts.conv_unit(inp_ch_num, 32, 3)    
         self.convs = [input_block]
         
         cur_ch_num = 32
@@ -102,20 +102,23 @@ class GaussNet(nn.Module):
         
         for i in range(self.num_blocks):
             x = self.convs[i](x)
-            
-        x = x.mean(3, keepdim = True).mean(2, keepdim = True)
+        
+        x = x.mean(-1, keepdim = True).mean(-2, keepdim = True)
         x = self.last_conv(x)
         x = x.squeeze(dim = -1).squeeze(dim = -1)
         
         mu = x[:,:self.latent_ch_num]
         
         log_sigma = x[:,self.latent_ch_num:]
+        sigma = torch.stack([torch.diag(torch.exp(log_sigma[i])) for i in range(bs)])
+    
+        return MultivariateNormal(mu, sigma)
         
-        res = []
-        for i in range(bs):
-            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i] + 1e-5)))) #a better way?
+        #res = []
+        #for i in range(bs):
+        #    res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
             
-        return res
+        #return res
     
     
 class ProbUNet(nn.Module):
@@ -137,26 +140,33 @@ class ProbUNet(nn.Module):
             seg = self.seg_to_one_hot(seg.type(torch.cuda.LongTensor)).squeeze(1).permute(0,3,1,2)
             self.post_res = self.posterior(img, seg)
             
-    def sample(self, img):
+    def sample(self, img): #?add m samples
         self.forward(img)
-        z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
+        #z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
+        z_prior = self.prior_res.sample()
         return self.combine_layer(self.unet_res, z_prior)
     
-    def reconstruct(self, use_posterior_mean = False):
+    def reconstruct(self, use_posterior_mean = True):
         if use_posterior_mean:
-            z_post = torch.stack([post_res_item.mean for post_res_item in self.post_res])
+            z_post = self.post_res.mean
+            #z_post = torch.stack([post_res_item.mean for post_res_item in self.post_res])
         else:
-            z_post = torch.stack([post_res_item.sample() for post_res_item in self.post_res])
+            z_post = self.post_res.sample()
+            #z_post = torch.stack([post_res_item.sample() for post_res_item in self.post_res])
         return self.combine_layer(self.unet_res, z_post)
     
     def compute_kl(self):
-        return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
+        #torch.nn.KLDivLoss(size_average=None, reduce=None, reduction='mean')
+        return kl_divergence(self.post_res, self.prior_res)
+        #return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
     
     def compute_lower_bound(self, imgs, segms, beta = 1):
         self.forward(imgs, segms)
         self.predicted_logits = self.reconstruct()
-        ce_loss = nn.CrossEntropyLoss()
-        cross_entropy_loss = ce_loss(self.predicted_logits.view(-1, self.n_classes), segms.type(torch.cuda.LongTensor).view(-1)).sum()
+        ce_loss = nn.CrossEntropyLoss(reduction = 'sum')
+        #print(self.predicted_logits.shape)
+        #print(segms.shape)
+        cross_entropy_loss = ce_loss(self.predicted_logits, segms.squeeze(1))
         kl = self.compute_kl().sum()
         #print(cross_entropy_loss, kl)
         return cross_entropy_loss + beta * kl
