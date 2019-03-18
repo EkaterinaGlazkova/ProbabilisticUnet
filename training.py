@@ -10,10 +10,10 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
 from model.model import ProbUNet
-import visualization_utils
+import vis_and_data_utils.visualization_utils as visualization_utils
 import train_utils
 
-from labels import labels
+from vis_and_data_utils.labels import labels
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -68,7 +68,7 @@ def training():
     n_epochs = 50
 
     model = ProbUNet(num_classes, latent_space_size)
-    model.to(device)
+    model.cuda()
     opt = torch.optim.Adam(model.parameters(), lr=0.0001)
     train_utils.train(model, opt, n_epochs, train_loader, test_loader, batch_size, save_path = "results/model")
 

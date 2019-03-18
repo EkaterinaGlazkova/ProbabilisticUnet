@@ -37,6 +37,7 @@ class UNet(nn.Module):
             x = self.up_blocks[i](x, x_inner[-(i+2)])
         x = self.output_block(x)
         #print(x.shape)
+        x = torch.nn.Softmax(dim=1)(x)
         return x
     
     
@@ -112,13 +113,13 @@ class GaussNet(nn.Module):
         log_sigma = x[:,self.latent_ch_num:]
         sigma = torch.stack([torch.diag(torch.exp(log_sigma[i])) for i in range(bs)])
     
-        return MultivariateNormal(mu, sigma)
+        #return MultivariateNormal(mu, sigma)
         
-        #res = []
-        #for i in range(bs):
-        #    res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
+        res = []
+        for i in range(bs):
+            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
             
-        #return res
+        return res
     
     
 class ProbUNet(nn.Module):
@@ -142,8 +143,8 @@ class ProbUNet(nn.Module):
             
     def sample(self, img): #?add m samples
         self.forward(img)
-        #z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
-        z_prior = self.prior_res.sample()
+        z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
+        #z_prior = self.prior_res.sample()
         return self.combine_layer(self.unet_res, z_prior)
     
     def reconstruct(self, use_posterior_mean = True):
@@ -157,8 +158,8 @@ class ProbUNet(nn.Module):
     
     def compute_kl(self):
         #torch.nn.KLDivLoss(size_average=None, reduce=None, reduction='mean')
-        return kl_divergence(self.post_res, self.prior_res)
-        #return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
+        #return kl_divergence(self.post_res, self.prior_res)
+        return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
     
     def compute_lower_bound(self, imgs, segms, beta = 1):
         self.forward(imgs, segms)
