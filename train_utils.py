@@ -51,6 +51,9 @@ def get_segmentation_variant(segm, classes_flip_vec = None):
     return res
 
 def create_possible_segm_with_probs(segm):
+    """
+        segm - torch tensor (h,w)
+    """
     res = segm.repeat((32, 1, 1))
     probs = torch.ones(32)
     
@@ -84,65 +87,146 @@ def train_epoch(model, optimizer, train_loader, batchsize):
     return loss_log
 
 def test(model, epoch_num, test_loader, batch_size, res_dir = None):
-    #ce_log, acc_log = [], []
-    ce_log = []
+    ce_log, ged_log = [], []
     model.eval()
     for batch_num, (x_batch, y_batch) in zip(trange(len(test_loader)), test_loader):  
         x_batch = x_batch.cuda()
         y_batch = y_batch.cuda()
-        #output = model.sample(x_batch)
-        output = model.unet(x_batch)
-        loss = nn.CrossEntropyLoss()(output, y_batch.squeeze())
-        ce_log.append(loss.item())
-        pred = torch.argmax(output, dim = 1)
-        #acc = torch.eq(pred, y_batch).float().mean().cpu().numpy()
-        #acc_log.append(acc)
-        
         if res_dir and batch_num == 0:
+            output = model.sample(x_batch, m)
+            for ind in range(m):
+                loss += nn.CrossEntropyLoss()(output[m], y_batch.squeeze())
+            loss = loss/m
+            ce_log.append(loss.item())
+            pred = torch.argmax(output, dim = 1)
+            ged = get_energy_distance(pred, y_batch.squeeze())
+            ged_log.append(ged.numpy())
             visualization_utils.plot_test_batch_with_results(x_batch.cpu(), 
                                                         y_batch.cpu().squeeze(), 
                                                         pred.cpu().squeeze(), 
                                                         outdir = res_dir + "epoch_{}.pdf".format(epoch_num))
-    return ce_log#, acc_log
+            
+        else:
+            output = model.sample(x_batch)
+            loss = nn.CrossEntropyLoss()(output, y_batch.squeeze())
+            ce_log.append(loss.item())
 
-#def plot_history(train_history, ce_log, acc_log, epoch_num, save_dir = "results/"):
-def plot_history(train_history, ce_log, epoch_num, save_dir = "results/"):
-    plt.figure()
-    plt.title('Results for epoch {}'.format(epoch_num))
-    plt.plot(train_history, label='train', zorder=1)
+    return ce_log, ged_log
+
+#def plot_history(train_history, ce_log, GED_log, epoch_num, save_dir = "results/"):
+#    plt.figure()
+#    plt.title('Results for epoch {}'.format(epoch_num))
+#    plt.plot(train_history, label='train', zorder=1)
     
-    points = np.array(ce_log)
-    plt.scatter(points[:, 0], points[:, 1], marker='+', s=180, c='orange', label='val_ce', zorder=2)
-    #points = np.array(acc_log)
-    #plt.scatter(points[:, 0], points[:, 1], marker='+', s=180, c='orange', label='val_acc', zorder=2)
+#    points = np.array(ce_log)
+#    plt.scatter(points[:, 0], points[:, 1], marker='+', s=180, c='orange', label='val_ce', zorder=2)
+#    points = np.array(acc_log)
+#    plt.scatter(points[:, 0], points[:, 1], marker='+', s=180, c='orange', label='val_acc', zorder=2)
         
-    plt.xlabel('train steps')
+#    plt.xlabel('train steps')
 
-    plt.legend(loc='best')
-    plt.grid()
+#    plt.legend(loc='best')
+#    plt.grid()
     
-    plt.savefig(save_dir + "loss_"+str(epoch_num) + ".png")
+#    plt.savefig(save_dir + "loss_"+str(epoch_num) + ".png")
+    
+def plot_history(train_history, epoch_num, title='loss', save_dir = "results/"):
+    plt.figure()
+    plt.title('Results of {} for epoch {}'.format(title, epoch_num))
+    plt.plot(train_history, zorder=1)
+    
+    plt.xlabel('train steps')
+    
+    #plt.legend(loc='best')
+    plt.grid()
+
+    plt.savefig(save_dir + title + "_"+str(epoch_num) + ".png")
     
     
 def train(model, opt, n_epochs, train_loader, test_loader, batchsize, save_path = None):
     train_log = []
-    #ce_log, acc_log = [], []
-    ce_log = []
+    ce_log, GED_log = [], []
+    steps = len(train_loader)
 
     for epoch in range(n_epochs):
         #train_loss = train_epoch(model, opt, train_loader, batchsize=batchsize)
-
-        #val_loss, val_acc = test(model, epoch, test_loader, res_dir = "results/")
-        val_loss = test(model, epoch, test_loader, batchsize, res_dir = "results/")
-        train_log.extend(train_loss)
-
-        steps = len(train_loader)
+        #train_log.extend(train_loss)
+        #plot_history(train_log, epoch, title = "loss", "results/")  
+        
+        val_loss, val_ged = test(model, epoch, test_loader, batchsize, res_dir = "results/")
         ce_log.append((steps * (epoch + 1), np.mean(val_loss)))
-        #acc_log.append((steps * (epoch + 1), np.mean(val_acc)))
-
-        #plot_history(train_log, ce_log, acc_log, epoch, "results/")  
-        plot_history(train_log, ce_log,  epoch, "results/")  
+        GED_log.append((steps * (epoch + 1), np.mean(val_ged)))
+        plot_history(ce_log, epoch, title = "cross_entropy") 
+        plot_history(GED_log, epoch, title = "GED") 
+        
         if save_path:
             torch.save(model.state_dict(), save_path)
             
     #print("Final error: {:.2%}".format(1 - acc_log[-1][1]))
+    
+def compute_iou(segm_1, segm_2, classes, loss_mask=None):
+    """
+        Computes IoU metrics for two segmentations only for given classes
+            (if class is not presented on both images, it is not considered in mean)
+        Input:
+            segm_i shape is (h,w), torch tensor
+            loss_mask = (h,w), bool, 1 what to count, torch tensor
+    """
+
+    if loss_mask is None:
+        loss_mask = torch.ones(segm_1.shape[0], segm_1.shape[1], dtype = torch.uint8)
+        
+    iou = torch.zeros(1,dtype=torch.float32)
+    
+    considered_classes = 0
+
+    for i,c in enumerate(classes):
+
+        pred_ = (segm_1 == c)
+        labels_ = (segm_2 == c)
+
+        TP = (pred_*labels_*loss_mask).sum()
+        FP = (pred_ * (~labels_) * loss_mask).sum()
+        FN = ((~pred_) * labels_  * loss_mask).sum()
+
+        if TP + FP + FN != 0:
+            iou += TP/(TP + FP + FN)
+            considered_classes += 1
+
+    return iou/considered_classes
+
+def get_energy_distance(S, gt):
+    """
+        Computes energy distance metric
+        Input:
+            S - segmentation variants (torch tensor of size (variants_num, h,w)) 
+            gt - ground truth segmentation (torch tensor of size  (h,w))
+        Output:
+            D_ed - energy_distance value (float)
+    """
+    n = len(S)
+    classes_list = visualization_utils.get_switchable_ids()
+    
+    Y, probs = create_possible_segm_with_probs(gt)
+    
+    SY = 0
+    SS = 0
+    YY = 0
+    
+    for S_i in S:
+        for j, Y_j in enumerate(Y):
+            SY += (1 - compute_iou(S_i, Y_j, classes_list))*probs[j]
+    
+    SY = SY*2/n
+    
+    for S_i in S:
+        for S_j in S:
+            SS += (1 - compute_iou(S_i, S_j, classes_list))
+            
+    SS /= n**2
+    
+    for i,Y_i in enumerate(Y):
+        for j,Y_j in enumerate(Y):
+            YY += (1 - compute_iou(Y_i, Y_j, classes_list))*probs[j]*probs[i]
+
+    return SY - SS - YY

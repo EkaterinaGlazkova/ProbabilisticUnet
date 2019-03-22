@@ -32,6 +32,12 @@ def get_color_map():
         color_map[switched_name2train_id[key]] = switched_labels2color[key]
     return color_map
 
+def get_switchable_ids():
+    switch_from_names = label_switches.keys()
+    switch_from_ids = [name2train_id[name] for name in switch_from_names]
+    switch_to_ids = [switched_name2train_id[name + "_2"] for name in switch_from_names]
+    return switch_from_ids + switch_to_ids
+
 def seg_to_rgb(segm, id_to_color):
     return id_to_color[segm.squeeze().int().numpy()]
 

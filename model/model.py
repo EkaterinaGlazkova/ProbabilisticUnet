@@ -141,7 +141,24 @@ class ProbUNet(nn.Module):
             seg = self.seg_to_one_hot(seg.type(torch.cuda.LongTensor)).squeeze(1).permute(0,3,1,2)
             self.post_res = self.posterior(img, seg)
             
-    def sample(self, img): #?add m samples
+    def sample_m(self, img, m):
+        """
+        Creates m segmentation samples for each item in imgs
+        Input:
+            img  - torch tensor of size (img_num, 3, h, w)
+            m - number of segmentations for each img
+        Return:
+            segmentation results - tensor of size (img_num, m, 1, h, w)
+        """
+        self.forward(img)
+        img_num, _, h, w = img.shape
+        res = torch.ones(m, img_num, self.n_classes, h, w )
+        for i in range(m):
+            z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
+            res[i] = self.combine_layer(self.unet_res, z_prior)
+        return res
+            
+    def sample(self, img):
         self.forward(img)
         z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
         #z_prior = self.prior_res.sample()
