@@ -19,7 +19,8 @@ from vis_and_data_utils.labels import labels
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_classes = 19
 
-batch_size = 8
+train_batch_size = 8
+test_batch_size = 4
 latent_space_size = 6
     
 def training():
@@ -37,7 +38,8 @@ def training():
     labels_transform_func = transforms.Compose([
                         transforms.Resize((256, 512), interpolation = PIL.Image.NEAREST),
                         transforms.Lambda(lambda x: id_to_train_id[x]),
-                        transforms.ToTensor()
+                        transforms.ToTensor(),
+                        train_utils.get_segmentation_variant
                         #transforms.Lambda(lambda x: x*255) #better way?
 
                     ])
@@ -58,10 +60,10 @@ def training():
 
 
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                               batch_size=batch_size)
+                                               batch_size=train_batch_size)
 
     test_loader = torch.utils.data.DataLoader(dataset=test_dataset, 
-                                              batch_size=batch_size)
+                                              batch_size=test_batch_size)
 
     #iter_num = 240000
     #n_epochs = iter_num // (len(train_dataset) // batch_size)
@@ -70,7 +72,7 @@ def training():
     model = ProbUNet(num_classes, latent_space_size)
     model.cuda()
     opt = torch.optim.Adam(model.parameters(), lr=0.0001)
-    train_utils.train(model, opt, n_epochs, train_loader, test_loader, batch_size, save_path = "results/model")
+    train_utils.train(model, opt, n_epochs, train_loader, test_loader, save_path = "results/model")
 
 if __name__ == "__main__":
     training()

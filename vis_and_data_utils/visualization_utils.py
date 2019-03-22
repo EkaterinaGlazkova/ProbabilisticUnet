@@ -88,6 +88,15 @@ def plot_test_batch_with_results(batch_imgs, batch_segms, results, outdir = None
         
         
 def plot_batch_with_results(batch_imgs, batch_segms, results, outdir = None):
+    """
+    Images, gt segmentations and generated segmentations
+    Input:
+        batch_imgs - tensor of size (img_num, 3, h, w)
+        batch_segms - tensor of size (img_num, m, h, w)
+        results - tensor of size (img_num, n, h, w)
+    Output:
+        
+    """
     num_predictions = results.shape[1]
     num_gt = batch_segms.shape[1]
     batch_size = batch_imgs.shape[0]
@@ -102,7 +111,7 @@ def plot_batch_with_results(batch_imgs, batch_segms, results, outdir = None):
     for img_num in range(batch_size):
         ax = plt.subplot(gs[0,img_num])
         ax.axis('off')
-        ax.imshow(batch_imgs[img_num].permute(1,2,0).cpu())
+        ax.imshow(batch_imgs[img_num].permute(1,2,0))
         
         for seg_ind in range(num_gt):
             ax = plt.subplot(gs[seg_ind + 1,img_num])
@@ -112,7 +121,7 @@ def plot_batch_with_results(batch_imgs, batch_segms, results, outdir = None):
         for pred_ind in range(num_predictions):
             ax = plt.subplot(gs[pred_ind + num_gt + 1,img_num])
             ax.axis('off')
-            ax.imshow(seg_to_rgb(results[img_num][seg_ind], cmap))
+            ax.imshow(seg_to_rgb(results[img_num][pred_ind], cmap))
     fig.tight_layout()
     if outdir:
         fig.savefig(outdir, dpi=200, bbox_inches="tight", pad_inches=0)

@@ -92,7 +92,8 @@ class GaussNet(nn.Module):
         self.last_conv = nn.Sequential(
             nn.Conv2d(cur_ch_num, cur_ch_num, 1, padding = 0), 
             nn.ReLU(),
-            nn.Conv2d(cur_ch_num, 2*latent_ch_num, 1, padding = 0)
+            nn.Conv2d(cur_ch_num, 2*latent_ch_num, 1, padding = 0),
+            nn.ReLU()
         ) 
 
     def forward(self, x, segm = None):
@@ -111,13 +112,11 @@ class GaussNet(nn.Module):
         mu = x[:,:self.latent_ch_num]
         
         log_sigma = x[:,self.latent_ch_num:]
-        sigma = torch.stack([torch.diag(torch.exp(log_sigma[i])) for i in range(bs)])
-    
-        #return MultivariateNormal(mu, sigma)
         
         res = []
         for i in range(bs):
-            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
+            #print(torch.diag(torch.exp(log_sigma[i])))
+            res.append(MultivariateNormal(mu[i], scale_tril = torch.diag(torch.exp(log_sigma[i])))) #a better way?
             
         return res
     
@@ -152,10 +151,10 @@ class ProbUNet(nn.Module):
         """
         self.forward(img)
         img_num, _, h, w = img.shape
-        res = torch.ones(m, img_num, self.n_classes, h, w )
+        res = torch.ones(img_num, m, self.n_classes, h, w ).cuda()
         for i in range(m):
             z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
-            res[i] = self.combine_layer(self.unet_res, z_prior)
+            res[:,i] = self.combine_layer(self.unet_res, z_prior)
         return res
             
     def sample(self, img):
@@ -166,11 +165,11 @@ class ProbUNet(nn.Module):
     
     def reconstruct(self, use_posterior_mean = True):
         if use_posterior_mean:
-            z_post = self.post_res.mean
-            #z_post = torch.stack([post_res_item.mean for post_res_item in self.post_res])
+            #z_post = self.post_res.mean
+            z_post = torch.stack([post_res_item.mean for post_res_item in self.post_res])
         else:
-            z_post = self.post_res.sample()
-            #z_post = torch.stack([post_res_item.sample() for post_res_item in self.post_res])
+            #z_post = self.post_res.sample()
+            z_post = torch.stack([post_res_item.sample() for post_res_item in self.post_res])
         return self.combine_layer(self.unet_res, z_post)
     
     def compute_kl(self):

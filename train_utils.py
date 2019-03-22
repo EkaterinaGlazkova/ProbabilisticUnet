@@ -1,5 +1,5 @@
 from itertools import product
-import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import PIL
 from tqdm import trange
@@ -16,6 +16,7 @@ from vis_and_data_utils.labels import labels
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 num_classes = 24
+m = 3
 
 def get_id_to_train_id(labels = labels):
     id_to_train_id = np.zeros((len(labels), 1), int)
@@ -71,7 +72,7 @@ def create_possible_segm_with_probs(segm):
                 probs[segm_ind] *= (1. - switch_probs[label_ind])
     return res, probs
 
-def train_epoch(model, optimizer, train_loader, batchsize):
+def train_epoch(model, optimizer, train_loader):
     loss_log = []
     model.train()
     for _, (x_batch, y_batch) in zip(trange(len(train_loader)), train_loader):
@@ -86,23 +87,27 @@ def train_epoch(model, optimizer, train_loader, batchsize):
         loss_log.append(loss)
     return loss_log
 
-def test(model, epoch_num, test_loader, batch_size, res_dir = None):
-    ce_log, ged_log = [], []
+def test(model, epoch_num, test_loader, res_dir = None):
+    ce_log = []
+    ged_log = []
     model.eval()
     for batch_num, (x_batch, y_batch) in zip(trange(len(test_loader)), test_loader):  
         x_batch = x_batch.cuda()
         y_batch = y_batch.cuda()
         if res_dir and batch_num == 0:
-            output = model.sample(x_batch, m)
+            output = model.sample_m(x_batch, m)
+            loss = 0
             for ind in range(m):
-                loss += nn.CrossEntropyLoss()(output[m], y_batch.squeeze())
+                loss += nn.CrossEntropyLoss()(output[:,ind], y_batch.squeeze()).item()
             loss = loss/m
-            ce_log.append(loss.item())
-            pred = torch.argmax(output, dim = 1)
-            ged = get_energy_distance(pred, y_batch.squeeze())
-            ged_log.append(ged.numpy())
-            visualization_utils.plot_test_batch_with_results(x_batch.cpu(), 
-                                                        y_batch.cpu().squeeze(), 
+            ce_log.append(loss)
+            pred = torch.argmax(output, dim = 2)
+            ged = 0
+            for i in range(test_loader.batch_size):
+                ged += get_energy_distance(pred[i].squeeze(), y_batch[i].squeeze())
+            ged_log.append((ged/test_loader.batch_size).numpy())
+            visualization_utils.plot_batch_with_results(x_batch.cpu(), 
+                                                        y_batch.cpu(), 
                                                         pred.cpu().squeeze(), 
                                                         outdir = res_dir + "epoch_{}.pdf".format(epoch_num))
             
@@ -110,6 +115,7 @@ def test(model, epoch_num, test_loader, batch_size, res_dir = None):
             output = model.sample(x_batch)
             loss = nn.CrossEntropyLoss()(output, y_batch.squeeze())
             ce_log.append(loss.item())
+
 
     return ce_log, ged_log
 
@@ -143,21 +149,33 @@ def plot_history(train_history, epoch_num, title='loss', save_dir = "results/"):
     plt.savefig(save_dir + title + "_"+str(epoch_num) + ".png")
     
     
-def train(model, opt, n_epochs, train_loader, test_loader, batchsize, save_path = None):
+def plot_val_history(train_history, epoch_num, title='loss', save_dir = "results/"):
+    plt.figure()
+    plt.title('Results of {} for epoch {}'.format(title, epoch_num))
+    
+    plt.xlabel('train steps')
+    
+    points = np.array(train_history)
+    plt.scatter(points[:, 0], points[:, 1], marker='+', s=180, c='orange', label='val_acc', zorder=2)
+    plt.grid()
+
+    plt.savefig(save_dir + title + "_"+str(epoch_num) + ".png")
+    
+def train(model, opt, n_epochs, train_loader, test_loader, save_path = None):
     train_log = []
     ce_log, GED_log = [], []
     steps = len(train_loader)
 
     for epoch in range(n_epochs):
-        #train_loss = train_epoch(model, opt, train_loader, batchsize=batchsize)
-        #train_log.extend(train_loss)
-        #plot_history(train_log, epoch, title = "loss", "results/")  
+        train_loss = train_epoch(model, opt, train_loader)
+        train_log.extend(train_loss)
+        plot_history(train_log, epoch, title = "loss")  
         
-        val_loss, val_ged = test(model, epoch, test_loader, batchsize, res_dir = "results/")
+        val_loss, val_ged = test(model, epoch, test_loader, res_dir = "results/")
         ce_log.append((steps * (epoch + 1), np.mean(val_loss)))
         GED_log.append((steps * (epoch + 1), np.mean(val_ged)))
-        plot_history(ce_log, epoch, title = "cross_entropy") 
-        plot_history(GED_log, epoch, title = "GED") 
+        plot_val_history(ce_log, epoch, title = "cross_entropy") 
+        plot_val_history(GED_log, epoch, title = "GED") 
         
         if save_path:
             torch.save(model.state_dict(), save_path)
@@ -174,7 +192,7 @@ def compute_iou(segm_1, segm_2, classes, loss_mask=None):
     """
 
     if loss_mask is None:
-        loss_mask = torch.ones(segm_1.shape[0], segm_1.shape[1], dtype = torch.uint8)
+        loss_mask = torch.ones(segm_1.shape[0], segm_1.shape[1], dtype = torch.uint8).cuda()
         
     iou = torch.zeros(1,dtype=torch.float32)
     
