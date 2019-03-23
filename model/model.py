@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.distributions import Normal, Independent
 from torch.distributions.kl import kl_divergence
 
 import model.unet_parts as unet_parts
@@ -67,7 +68,7 @@ class Conv1x1(nn.Module):
     
 
 class GaussNet(nn.Module):
-    def __init__(self, distr_type = "Prior", latent_ch_num = 6, num_blocks = 3, n_classes = 19):
+    def __init__(self, distr_type = "Prior", latent_ch_num = 6, num_blocks = 3, n_classes = 24):
         super(GaussNet, self).__init__()
         
         assert distr_type in {"Prior", "Posterior"}, "Incorrect distribution type"
@@ -113,11 +114,15 @@ class GaussNet(nn.Module):
         
         log_sigma = x[:,self.latent_ch_num:]
         
+        #res = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)),1)
+        #return res
+        
         res = []
         for i in range(bs):
             #print(torch.diag(torch.exp(log_sigma[i])))
-            res.append(MultivariateNormal(mu[i], scale_tril = torch.diag(torch.exp(log_sigma[i])))) #a better way?
-            
+        
+            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
+        #    res.append(MultivariateNormal(mu[i], torch.eye(self.latent_ch_num, device = device)))
         return res
     
     
@@ -163,6 +168,22 @@ class ProbUNet(nn.Module):
         #z_prior = self.prior_res.sample()
         return self.combine_layer(self.unet_res, z_prior)
     
+    #def sample(self, testing=False):
+    #    """
+    #    Sample a segmentation by reconstructing from a prior sample
+    #    and combining this with UNet features
+    #    """
+    #    if testing == False:
+    #        z_prior = self.prior_latent_space.rsample()
+    #        self.z_prior_sample = z_prior
+    #    else:
+    #        #You can choose whether you mean a sample or the mean here. For the GED it is important to take a sample.
+    #        #z_prior = self.prior_latent_space.base_dist.loc 
+    #        z_prior = self.prior_latent_space.sample()
+    #        self.z_prior_sample = z_prior
+    #    return self.fcomb.forward(self.unet_features,z_prior)
+
+    
     def reconstruct(self, use_posterior_mean = True):
         if use_posterior_mean:
             #z_post = self.post_res.mean
@@ -175,6 +196,13 @@ class ProbUNet(nn.Module):
     def compute_kl(self):
         #torch.nn.KLDivLoss(size_average=None, reduce=None, reduction='mean')
         #return kl_divergence(self.post_res, self.prior_res)
+        #return kl_divergence(self.post_res.base_dist, self.prior_res.base_dist)
+        
+        #z_posterior = self.post_res.rsample()
+        #log_posterior_prob = self.post_res.log_prob(z_posterior)
+        #log_prior_prob = self.prior_res.log_prob(z_posterior)
+        #kl_div = log_posterior_prob - log_prior_prob
+        #return kl_div
         return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
     
     def compute_lower_bound(self, imgs, segms, beta = 1):
@@ -184,7 +212,9 @@ class ProbUNet(nn.Module):
         #print(self.predicted_logits.shape)
         #print(segms.shape)
         cross_entropy_loss = ce_loss(self.predicted_logits, segms.squeeze(1))
-        kl = self.compute_kl().sum()
+        kl = self.compute_kl().mean()
+        #kl = torch.mean(self.compute_kl())
+        #kl = torch.mean(self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
         #print(cross_entropy_loss, kl)
         return cross_entropy_loss + beta * kl
         

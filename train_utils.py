@@ -176,6 +176,7 @@ def train(model, opt, n_epochs, train_loader, test_loader, save_path = None):
         GED_log.append((steps * (epoch + 1), np.mean(val_ged)))
         plot_val_history(ce_log, epoch, title = "cross_entropy") 
         plot_val_history(GED_log, epoch, title = "GED") 
+        plt.close('all')
         
         if save_path:
             torch.save(model.state_dict(), save_path)

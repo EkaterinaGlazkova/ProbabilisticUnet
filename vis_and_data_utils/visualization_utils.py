@@ -54,9 +54,10 @@ def show_item(dataset, ind = None):
     if ind == None:
         ind = int(np.random.random()*len(dataset))
     fig, axs = plt.subplots(1, 2, figsize=(15, 4), constrained_layout=True)
-    axs[0].imshow(dataset[ind][0].permute(1,2,0))
+    im, target = dataset[ind]
+    axs[0].imshow(im.permute(1,2,0))
     axs[0].axis('off')
-    axs[1].imshow(seg_to_rgb(dataset[ind][1], id_to_color))
+    axs[1].imshow(seg_to_rgb(target, id_to_color))
     axs[1].axis('off')
     plt.show()
 

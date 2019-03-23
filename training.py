@@ -17,7 +17,7 @@ from vis_and_data_utils.labels import labels
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-num_classes = 19
+num_classes = 24
 
 train_batch_size = 8
 test_batch_size = 4
