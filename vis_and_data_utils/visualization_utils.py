@@ -7,7 +7,9 @@ from collections import OrderedDict
 
 id2train_id = {label.id: label.trainId for label in labels}
 
-train_id2color = {label.trainId: label.color for label in labels }
+train_id2color = {label.trainId: label.color for label in labels if label.trainId != 255}
+train_id2color[24] = [0,0,0]
+
 name2train_id = {label.name: label.trainId for label in labels }
 
 switched_labels2color = {'road_2': (84, 86, 22), 
@@ -16,15 +18,23 @@ switched_labels2color = {'road_2': (84, 86, 22),
                          'car_2': (30, 193, 252), 
                          'sidewalk_2': (46, 247, 180)}
 
-label_switches = OrderedDict([('sidewalk', 8./17.), ('person', 7./17.), ('car', 6./17.), ('vegetation', 5./17.), ('road', 4./17.)])
+label_switches = OrderedDict([('sidewalk', 8./17.), 
+                              ('person', 7./17.), 
+                              ('car', 6./17.), 
+                              ('vegetation', 5./17.), 
+                              ('road', 4./17.)])
+
 
 switched_id2name = {19+i:list(switched_labels2color.keys())[i] for i in range(len(switched_labels2color))}
 switched_name2train_id = {list(switched_labels2color.keys())[i]:19+i for i in range(len(switched_labels2color))}
 
 def get_color_map():
+    """
+       returns np array of size (25, 3) - mapping from class (with junk class and switchable classes) to  color
+    """
     
-    color_map = np.zeros((256, 3), dtype = np.uint8)
-    color_map[255] = [0,0,0]
+    color_map = np.zeros((25, 3), dtype = np.uint8)
+    color_map[24] = [0,0,0]
     
     for train_id, color in train_id2color.items():
         color_map[train_id] =color
@@ -38,7 +48,9 @@ def get_switchable_ids():
     switch_to_ids = [switched_name2train_id[name + "_2"] for name in switch_from_names]
     return switch_from_ids + switch_to_ids
 
-def seg_to_rgb(segm, id_to_color):
+def seg_to_rgb(segm, id_to_color = None):
+    if id_to_color is None:
+        id_to_color = get_color_map()
     return id_to_color[segm.squeeze().int().numpy()]
 
 def show_dataset_random_examples(dataset, n=4):

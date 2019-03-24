@@ -10,7 +10,7 @@ import model.unet_parts as unet_parts
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class UNet(nn.Module):
-    def __init__(self, n_classes, num_blocks):
+    def __init__(self, n_classes, num_blocks = 4):
         super(UNet, self).__init__()
         self.num_blocks = num_blocks
         self.input_block = unet_parts.conv_unit(3, 32, 1).to(device)
@@ -37,8 +37,6 @@ class UNet(nn.Module):
         for i in range(self.num_blocks):
             x = self.up_blocks[i](x, x_inner[-(i+2)])
         x = self.output_block(x)
-        #print(x.shape)
-        x = torch.nn.Softmax(dim=1)(x)
         return x
     
     
@@ -54,8 +52,6 @@ class Conv1x1(nn.Module):
             nn.ReLU(),
             nn.Conv2d(hidden_size, hidden_size, 1, padding = 0).to(device), 
             nn.ReLU(),
-            nn.Conv2d(hidden_size, hidden_size, 1, padding = 0).to(device), 
-            nn.ReLU(),
             nn.Conv2d(hidden_size, n_classes, 1, padding = 0).to(device)
         )
 
@@ -64,11 +60,12 @@ class Conv1x1(nn.Module):
         z = z.unsqueeze(2).unsqueeze(3).expand(bs, self.latent_ch_num, h, w) #better way?
         inp = torch.cat([unet_res, z], dim=1)
         res = self.conv(inp)
+        res = torch.nn.Softmax(dim=1)(res)
         return res
     
 
 class GaussNet(nn.Module):
-    def __init__(self, distr_type = "Prior", latent_ch_num = 6, num_blocks = 3, n_classes = 24):
+    def __init__(self, distr_type = "Prior", latent_ch_num = 3, num_blocks = 4, n_classes = 25):
         super(GaussNet, self).__init__()
         
         assert distr_type in {"Prior", "Posterior"}, "Incorrect distribution type"
@@ -86,7 +83,7 @@ class GaussNet(nn.Module):
         self.convs = [input_block]
         
         cur_ch_num = 32
-        for _ in range(self.num_blocks - 1):
+        for _ in range(self.num_blocks):
             self.convs.append(unet_parts.down_block(cur_ch_num, cur_ch_num*2, 3))
             cur_ch_num *= 2
             
@@ -103,7 +100,7 @@ class GaussNet(nn.Module):
         if self.is_posterior:
             x = torch.cat([segm, x], dim=1)
         
-        for i in range(self.num_blocks):
+        for i in range(self.num_blocks + 1):
             x = self.convs[i](x)
         
         x = x.mean(-1, keepdim = True).mean(-2, keepdim = True)
@@ -114,15 +111,9 @@ class GaussNet(nn.Module):
         
         log_sigma = x[:,self.latent_ch_num:]
         
-        #res = Independent(Normal(loc=mu, scale=torch.exp(log_sigma)),1)
-        #return res
-        
         res = []
         for i in range(bs):
-            #print(torch.diag(torch.exp(log_sigma[i])))
-        
-            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i])))) #a better way?
-        #    res.append(MultivariateNormal(mu[i], torch.eye(self.latent_ch_num, device = device)))
+            res.append(MultivariateNormal(mu[i], torch.diag(torch.exp(log_sigma[i]))))
         return res
     
     
@@ -131,12 +122,15 @@ class ProbUNet(nn.Module):
         super(ProbUNet, self).__init__()
         self.n_classes =n_classes
         self.unet = UNet(n_classes, unet_num_blocks).to(device)
-        self.prior = GaussNet(distr_type="Prior", latent_ch_num = latent_ch_num).to(device)
-        self.posterior = GaussNet(distr_type="Posterior", latent_ch_num = latent_ch_num).to(device)
+        self.prior = GaussNet(distr_type="Prior", latent_ch_num = latent_ch_num, n_classes = n_classes).to(device)
+        self.posterior = GaussNet(distr_type="Posterior", latent_ch_num = latent_ch_num, n_classes = n_classes).to(device)
         self.combine_layer = Conv1x1(n_classes, latent_ch_num).to(device)
         self.seg_to_one_hot = nn.Embedding(n_classes, n_classes).to(device)
         self.seg_to_one_hot.weight.data = torch.eye(n_classes)
         self.seg_to_one_hot.weight.requires_grad = False
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.orthogonal_(m.weight)
 
     def forward(self, img, seg = None):
         self.unet_res = self.unet(img)
@@ -157,64 +151,33 @@ class ProbUNet(nn.Module):
         self.forward(img)
         img_num, _, h, w = img.shape
         res = torch.ones(img_num, m, self.n_classes, h, w ).cuda()
+        z_prior = torch.stack([prior_res_item.sample((m,)) for prior_res_item in self.prior_res])
         for i in range(m):
-            z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
-            res[:,i] = self.combine_layer(self.unet_res, z_prior)
+            #z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
+            #res[:,i] = self.combine_layer(self.unet_res, z_prior)
+            res[:,i] = self.combine_layer(self.unet_res, z_prior[:,i])
         return res
             
     def sample(self, img):
         self.forward(img)
         z_prior = torch.stack([prior_res_item.sample() for prior_res_item in self.prior_res])
-        #z_prior = self.prior_res.sample()
         return self.combine_layer(self.unet_res, z_prior)
     
-    #def sample(self, testing=False):
-    #    """
-    #    Sample a segmentation by reconstructing from a prior sample
-    #    and combining this with UNet features
-    #    """
-    #    if testing == False:
-    #        z_prior = self.prior_latent_space.rsample()
-    #        self.z_prior_sample = z_prior
-    #    else:
-    #        #You can choose whether you mean a sample or the mean here. For the GED it is important to take a sample.
-    #        #z_prior = self.prior_latent_space.base_dist.loc 
-    #        z_prior = self.prior_latent_space.sample()
-    #        self.z_prior_sample = z_prior
-    #    return self.fcomb.forward(self.unet_features,z_prior)
-
-    
-    def reconstruct(self, use_posterior_mean = True):
+    def reconstruct(self, use_posterior_mean = False):
         if use_posterior_mean:
-            #z_post = self.post_res.mean
             z_post = torch.stack([post_res_item.mean for post_res_item in self.post_res])
         else:
-            #z_post = self.post_res.sample()
             z_post = torch.stack([post_res_item.sample() for post_res_item in self.post_res])
         return self.combine_layer(self.unet_res, z_post)
     
     def compute_kl(self):
-        #torch.nn.KLDivLoss(size_average=None, reduce=None, reduction='mean')
-        #return kl_divergence(self.post_res, self.prior_res)
-        #return kl_divergence(self.post_res.base_dist, self.prior_res.base_dist)
-        
-        #z_posterior = self.post_res.rsample()
-        #log_posterior_prob = self.post_res.log_prob(z_posterior)
-        #log_prior_prob = self.prior_res.log_prob(z_posterior)
-        #kl_div = log_posterior_prob - log_prior_prob
-        #return kl_div
         return torch.stack([kl_divergence(self.post_res[ind], self.prior_res[ind]) for ind in range(len(self.prior_res))])
     
-    def compute_lower_bound(self, imgs, segms, beta = 1):
+    def compute_lower_bound(self, imgs, segms, beta = 1, ignore_index = 255, weight = None):
         self.forward(imgs, segms)
         self.predicted_logits = self.reconstruct()
-        ce_loss = nn.CrossEntropyLoss(reduction = 'sum')
-        #print(self.predicted_logits.shape)
-        #print(segms.shape)
+        ce_loss = nn.CrossEntropyLoss(weight = weight, reduction = 'mean', ignore_index = ignore_index)
         cross_entropy_loss = ce_loss(self.predicted_logits, segms.squeeze(1))
         kl = self.compute_kl().mean()
-        #kl = torch.mean(self.compute_kl())
-        #kl = torch.mean(self.kl_divergence(analytic=analytic_kl, calculate_posterior=False, z_posterior=z_posterior))
-        #print(cross_entropy_loss, kl)
         return cross_entropy_loss + beta * kl
         
