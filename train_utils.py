@@ -162,7 +162,7 @@ def plot_val_history(train_history, epoch_num, title='loss', save_dir = "results
 
     plt.savefig(save_dir + title + "_"+str(epoch_num) + ".png")
     
-def train(model, opt, n_epochs, train_loader, test_loader, save_path = None):
+def train(model, opt, shed, n_epochs, train_loader, test_loader, save_path = None):
     """
         Whole training procedure
     """
@@ -171,6 +171,7 @@ def train(model, opt, n_epochs, train_loader, test_loader, save_path = None):
     steps = len(train_loader)
 
     for epoch in range(n_epochs):
+        shed.step()
         train_loss = train_epoch(model, opt, train_loader)
         train_log.extend(train_loss)
         plot_history(train_log, epoch, title = "loss", save_dir = save_path)  

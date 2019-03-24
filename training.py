@@ -107,8 +107,8 @@ def training():
     #model.load_state_dict(torch.load("results/model"))
     model.cuda()
     opt = torch.optim.Adam(model.parameters(), lr=0.0001)
-    scheduler = StepLR(opt, step_size=1000, gamma=0.9)
-    train_utils.train(model, opt, n_epochs, train_loader, test_loader, save_path = "results/final_3D/")
+    scheduler = StepLR(opt, step_size=5, gamma=0.9)
+    train_utils.train(model, opt, scheduler, n_epochs, train_loader, test_loader, save_path = "results/final_3D/")
 
 if __name__ == "__main__":
     training()
